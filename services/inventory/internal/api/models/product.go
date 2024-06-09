@@ -10,9 +10,10 @@ type Product struct {
 }
 
 type Variant struct {
-	gorm.Model
-	ProductID uint    `gorm:"not null"`                          // Foreign key
-	Price     float64 `gorm:"type:decimal(10,2);not null"`       // Price as a decimal
-	Quantity  int     `gorm:"type:int;not null"`
-	Size      string  `gorm:"type:varchar(100)"`                 // Size description (e.g., S, M, L, XL)
+    gorm.Model
+    ProductID uint    `gorm:"primaryKey;autoIncrement:false"` // Part of the primary key, no auto increment
+    Size      string  `gorm:"primaryKey;type:varchar(100)"`   // Part of the primary key
+    Price     float64 `gorm:"type:decimal(10,2);not null"`
+    Quantity  int     `gorm:"type:int;not null"`
+    Product   Product `gorm:"foreignKey:ProductID"`           // Reference to Product
 }
