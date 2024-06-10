@@ -9,7 +9,7 @@ import (
 
 
 func SetUpDb() *gorm.DB {
-	url := os.Getenv("INVENTORY_URL")
+	url := os.Getenv("POSTGRES_CONN_URL")
 
 	if url == "" {
 		panic("invalid inventory url")
