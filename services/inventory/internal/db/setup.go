@@ -12,7 +12,7 @@ func SetUpDb() *gorm.DB {
 	url := os.Getenv("INVENTORY_URL")
 
 	if url == "" {
-		panic("invalid inventory postgres url")
+		panic("invalid inventory url")
 	}
 
 	db, err := gorm.Open(postgres.Open(url), &gorm.Config{})
