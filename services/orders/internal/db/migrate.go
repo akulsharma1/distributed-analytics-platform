@@ -28,7 +28,7 @@ func Migrate(db *gorm.DB) {
 
 	db.Exec(`
 	CREATE TABLE IF NOT EXISTS variants (
-		id SERIAL NOT NULL,
+		id SERIAL PRIMARY KEY,
 		created_at TIMESTAMPTZ,
 		updated_at TIMESTAMPTZ,
 		deleted_at TIMESTAMPTZ,
@@ -36,7 +36,6 @@ func Migrate(db *gorm.DB) {
 		size VARCHAR(100) NOT NULL,
 		price decimal(10,2) NOT NULL,
 		quantity INT NOT NULL,
-		PRIMARY KEY (product_id, size),
     	FOREIGN KEY (product_id) REFERENCES products(id)
 	);`)
 
@@ -46,8 +45,6 @@ func Migrate(db *gorm.DB) {
         created_at TIMESTAMPTZ,
         updated_at TIMESTAMPTZ,
         deleted_at TIMESTAMPTZ,
-        product_name VARCHAR(100) NOT NULL,
-        quantity INT NOT NULL,
         customer_email VARCHAR(100) NOT NULL REFERENCES customers(email)
     );`)
 
@@ -58,13 +55,10 @@ func Migrate(db *gorm.DB) {
 		updated_at TIMESTAMPTZ,
 		deleted_at TIMESTAMPTZ,
 		order_id INT NOT NULL,
-		product_id INT NOT NULL,
-    	size VARCHAR(100) NOT NULL,
+		variant_id INT NOT NULL,
 		quantity INT NOT NULL,
-		PRIMARY KEY (order_id, product_id, size),
+		PRIMARY KEY (order_id, variant_id),
 		FOREIGN KEY (order_id) REFERENCES orders(id),
-		FOREIGN KEY (product_id, size) REFERENCES variants(product_id, size)
+		FOREIGN KEY (variant_id) REFERENCES variants(id)
 	);`)
-
-	// db.Migrator()
 }
