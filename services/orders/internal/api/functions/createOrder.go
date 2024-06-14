@@ -2,7 +2,7 @@ package functions
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"time"
 
@@ -12,10 +12,10 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-func CreateOrder (c *fiber.Ctx, inventoryChan chan kafka.InventoryMessage) error {
-	var products []models.Product
+func CreateOrder(c *fiber.Ctx, inventoryChan chan kafka.InventoryMessage, orderRespChan chan kafka.OrderResponseMessage) error {
+	var order models.Order
 
-	if err := c.BodyParser(&products); err != nil {
+	if err := c.BodyParser(&order); err != nil {
 		return c.Status(http.StatusBadRequest).JSON(&fiber.Map{
 			"success": false,
 			"error": err,
@@ -23,13 +23,13 @@ func CreateOrder (c *fiber.Ctx, inventoryChan chan kafka.InventoryMessage) error
 		})
 	}
 
-	message := &kafka.InventoryMessage{Products: products}
+	inventorykafkamsg := &kafka.InventoryMessage{OrderItems: order.OrderItems}
 
-	jsonMsg, _ := json.Marshal(message)
+	inventoryJsonMsg, _ := json.Marshal(inventorykafkamsg)
 
 	_, _, err := kafka.Producer.SendMessage(&sarama.ProducerMessage{
 		Topic: kafka.GET_INVENTORY,
-		Key: sarama.ByteEncoder(jsonMsg),
+		Key: sarama.ByteEncoder(inventoryJsonMsg),
 	})
 
 	if err != nil {
@@ -40,67 +40,104 @@ func CreateOrder (c *fiber.Ctx, inventoryChan chan kafka.InventoryMessage) error
 		})
 	}
 
-	timeout := time.After(30 * time.Second)
-	
+	timeout := time.After(10 * time.Second)
+
 	loop:
 	for {
-        select {
-        case inventoryMessage := <-inventoryChan:
-			if !compareInventoryProducts(inventoryMessage, products) {
+		select {
+		case inventoryMsg := <-inventoryChan:
+			hasEnoughStock, err := compareInventoryProducts(inventoryMsg, order)
+
+			if err != nil {
 				continue
 			}
 
-			inventoryStock := map[string]int{}
-			for _, inventoryProduct := range inventoryMessage.Products {
-				for _, variant := range inventoryProduct.Variants {
-					inventoryStock[fmt.Sprintf("%v_%v", inventoryProduct.ID, variant.Size)] = variant.Quantity
-				}
+			if !hasEnoughStock {
+				return c.Status(http.StatusBadRequest).JSON(&fiber.Map{
+					"success": false,
+					"error": "unable to create order",
+					"message": "not enough stock",
+				})
 			}
 
-			for _, product := range products {
-				for _, variant := range product.Variants {
-					remainingStock, ok := inventoryStock[fmt.Sprintf("%v_%v", product.ID, variant.Size)]
-					if !ok || remainingStock <= 0 {
-						return c.Status(http.StatusBadRequest).JSON(&fiber.Map{
-							"success": false,
-							"error": "unable to create order",
-							"message": "not enough stock",
-						})
-					}
-				}
-			}
 			break loop
+		case <-timeout:
+			return c.Status(http.StatusBadRequest).JSON(&fiber.Map{
+				"success": false,
+				"error": "timeout waiting for stock information",
+				"message": "error checking stock",
+			})
+		}
+	}
 
-        case <-timeout:
-            return c.Status(http.StatusBadRequest).JSON(&fiber.Map{
-                "success": false,
-                "error": "timeout waiting for stock information",
-                "message": "error checking stock",
-            })
-        }
-    }
+	orderMsg, _ := json.Marshal(order)
 
-	// TODO: create kafka message for adding order
+	_, _, err = kafka.Producer.SendMessage(&sarama.ProducerMessage{
+		Topic: kafka.CREATE_ORDER,
+		Key: sarama.ByteEncoder(orderMsg),
+	})
+
+	if err != nil {
+		return c.Status(http.StatusBadRequest).JSON(&fiber.Map{
+			"success": false,
+			"error": err,
+			"message": "error creating order",
+		})
+	}
+
+	timeout = time.After(10 * time.Second)
+
+	loop2:
+	for {
+		select {
+		case response := <-orderRespChan:
+			if response.OrderID != int(order.ID) {
+				continue
+			}
+
+			if (!response.Success) {
+				return c.Status(http.StatusBadRequest).JSON(&fiber.Map{
+					"success": false,
+					"error": "items out of stock",
+					"message": "error creating order",
+					"data": response.OutOfStockVariants,
+				})
+			}
+
+			break loop2
+		case <-timeout:
+			return c.Status(http.StatusBadRequest).JSON(&fiber.Map{
+				"success": false,
+				"error": "timeout creating order",
+				"message": "error creating order",
+			})
+		}
+	}
+
 	return c.Status(http.StatusOK).JSON(&fiber.Map{
 		"success": true,
 		"message": "created order",
 	})
 
+	
 }
 
-func compareInventoryProducts(inventoryMessage kafka.InventoryMessage, products []models.Product) bool {
-	inventoryProducts := make(map[uint]bool)
+func compareInventoryProducts(inventoryMessage kafka.InventoryMessage, order models.Order) (bool, error) {
+	inventoryVariants := make(map[uint]int)
 
-	for _, product := range inventoryMessage.Products {
-		inventoryProducts[product.ID] = true
+	for _, orderItem := range inventoryMessage.OrderItems {
+		inventoryVariants[orderItem.Variant.ID] = orderItem.Variant.Quantity
 	}
 
-	for _, product := range products {
-		_, ok := inventoryProducts[product.ID]
+	for _, orderItem := range order.OrderItems {
+		quantity, ok := inventoryVariants[orderItem.Variant.ID]
 		if !ok {
-			return false
+			return false, errors.New("invalid inventory msg")
+		}
+		if quantity < orderItem.Variant.Quantity {
+			return false, nil
 		}
 	}
 
-	return true
+	return true, nil
 }
