@@ -8,8 +8,10 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/akulsharma1/distributed-analytics-platform/services/orders/internal/api/models"
+	"github.com/akulsharma1/distributed-analytics-platform/services/orders/internal/db"
 	"github.com/akulsharma1/distributed-analytics-platform/services/orders/internal/kafka"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 func CreateOrder(c *fiber.Ctx, inventoryChan chan kafka.InventoryMessage, orderRespChan chan kafka.OrderResponseMessage) error {
@@ -23,13 +25,15 @@ func CreateOrder(c *fiber.Ctx, inventoryChan chan kafka.InventoryMessage, orderR
 		})
 	}
 
+	inventoryKafkaUUID := uuid.New().String()
 	inventorykafkamsg := &kafka.InventoryMessage{OrderItems: order.OrderItems}
 
 	inventoryJsonMsg, _ := json.Marshal(inventorykafkamsg)
 
 	_, _, err := kafka.Producer.SendMessage(&sarama.ProducerMessage{
 		Topic: kafka.GET_INVENTORY,
-		Key: sarama.ByteEncoder(inventoryJsonMsg),
+		Key: sarama.StringEncoder(inventoryKafkaUUID),
+		Value: sarama.ByteEncoder(inventoryJsonMsg),
 	})
 
 	if err != nil {
@@ -46,6 +50,10 @@ func CreateOrder(c *fiber.Ctx, inventoryChan chan kafka.InventoryMessage, orderR
 	for {
 		select {
 		case inventoryMsg := <-inventoryChan:
+			if inventoryMsg.MessageID != inventoryKafkaUUID {
+				continue
+			}
+
 			hasEnoughStock, err := compareInventoryProducts(inventoryMsg, order)
 
 			if err != nil {
@@ -70,11 +78,18 @@ func CreateOrder(c *fiber.Ctx, inventoryChan chan kafka.InventoryMessage, orderR
 		}
 	}
 
-	orderMsg, _ := json.Marshal(order)
+	kafkaOrderUUID := uuid.NewString()
+
+	kafkaOrder := kafka.OrderCreationMessage{
+		Order: order,
+	}
+
+	orderMsg, _ := json.Marshal(kafkaOrder)
 
 	_, _, err = kafka.Producer.SendMessage(&sarama.ProducerMessage{
 		Topic: kafka.CREATE_ORDER,
-		Key: sarama.ByteEncoder(orderMsg),
+		Key: sarama.StringEncoder(kafkaOrderUUID),
+		Value: sarama.ByteEncoder(orderMsg),
 	})
 
 	if err != nil {
@@ -91,7 +106,7 @@ func CreateOrder(c *fiber.Ctx, inventoryChan chan kafka.InventoryMessage, orderR
 	for {
 		select {
 		case response := <-orderRespChan:
-			if response.OrderID != int(order.ID) {
+			if response.MessageID != kafkaOrderUUID {
 				continue
 			}
 
@@ -113,6 +128,30 @@ func CreateOrder(c *fiber.Ctx, inventoryChan chan kafka.InventoryMessage, orderR
 			})
 		}
 	}
+
+	err = db.DATABASE.Where("email = ?", order.CustomerEmail).FirstOrCreate(&models.Customer{
+		Name: "unknown",
+		Email: order.CustomerEmail,
+	}).Error
+
+	if err != nil {
+		return c.Status(http.StatusBadRequest).JSON(&fiber.Map{
+			"success": false,
+			"error": err,
+			"message": "error creating customer",
+		})
+	}
+
+	err = db.DATABASE.Create(&order).Error
+
+	if err != nil {
+		return c.Status(http.StatusBadRequest).JSON(&fiber.Map{
+			"success": false,
+			"error": err,
+			"message": "error adding order to database",
+		})
+	}
+
 
 	return c.Status(http.StatusOK).JSON(&fiber.Map{
 		"success": true,

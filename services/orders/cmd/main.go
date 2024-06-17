@@ -58,6 +58,7 @@ func main() {
 			select {
 			case msg := <-kafka.InventoryPartition.Messages():
 				var message kafka.InventoryMessage
+				message.MessageID = string(msg.Key)
 				if err := json.Unmarshal(msg.Value, &message); err != nil {
 					log.Printf("Error unmarshaling message: %v", err)
                     continue
@@ -77,6 +78,7 @@ func main() {
 			select {
 			case msg := <-kafka.OrderPartition.Messages():
 				var message kafka.OrderResponseMessage
+				message.MessageID = string(msg.Key)
 				if err := json.Unmarshal(msg.Value, &message); err != nil {
 					log.Printf("Error unmarshaling message: %v", err)
                     continue
