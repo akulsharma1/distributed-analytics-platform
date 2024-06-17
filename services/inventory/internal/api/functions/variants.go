@@ -26,7 +26,7 @@ func AddVariant(c *fiber.Ctx) error {
         })
     }
 
-	variant.ProductID = uint(productID)
+	variant.ProductID = int(productID)
 	
 	if err := db.DATABASE.Create(&variant).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
